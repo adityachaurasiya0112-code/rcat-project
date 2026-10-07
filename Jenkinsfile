@@ -11,36 +11,13 @@ pipeline {
 
     stages {
 
-        stage('Setup Java 17') {
+        stage('Environment Check') {
             steps {
                 sh '''
-                    set -e
-
-                    echo "=== Setting up Java 17 ==="
-
-                    if ! command -v java >/dev/null 2>&1 || \
-                       ! java -version 2>&1 | grep -q '17\\.'; then
-
-                        echo "Java 17 not found. Installing automatically..."
-
-                        sudo apt-get update
-                        sudo apt-get install -y openjdk-17-jdk
-
-                    else
-                        echo "Java 17 already installed."
-                    fi
-
-                    JAVA17_HOME=$(dirname $(dirname $(readlink -f $(which java))))
-
-                    echo "JAVA17_HOME=$JAVA17_HOME"
-
-                    export JAVA_HOME="$JAVA17_HOME"
-                    export PATH="$JAVA_HOME/bin:$PATH"
-
-                    java -version
-                    javac -version
-
-                    echo "Java 17 setup completed."
+                    echo "=== Jenkins Environment ==="
+                    java -version || true
+                    mvn -version || true
+                    docker --version
                 '''
             }
         }
@@ -55,36 +32,38 @@ pipeline {
             }
         }
 
-        stage('Build') {
+        stage('Build with Java 17') {
             steps {
                 sh '''
                     set -e
 
-                    JAVA17_HOME=$(dirname $(dirname $(readlink -f $(which java))))
+                    echo "=== Building project with Java 17 ==="
 
-                    export JAVA_HOME="$JAVA17_HOME"
-                    export PATH="$JAVA_HOME/bin:$PATH"
+                    docker run --rm \
+                        -v "$WORKSPACE:/workspace" \
+                        -w /workspace \
+                        maven:3.9.11-eclipse-temurin-17 \
+                        mvn clean package -DskipTests
 
-                    echo "Building with:"
-                    java -version
-                    mvn -version
-
-                    mvn clean package -DskipTests
+                    echo "Build completed successfully."
                 '''
             }
         }
 
-        stage('Test') {
+        stage('Test with Java 17') {
             steps {
                 sh '''
                     set -e
 
-                    JAVA17_HOME=$(dirname $(dirname $(readlink -f $(which java))))
+                    echo "=== Running tests with Java 17 ==="
 
-                    export JAVA_HOME="$JAVA17_HOME"
-                    export PATH="$JAVA_HOME/bin:$PATH"
+                    docker run --rm \
+                        -v "$WORKSPACE:/workspace" \
+                        -w /workspace \
+                        maven:3.9.11-eclipse-temurin-17 \
+                        mvn test
 
-                    mvn test
+                    echo "Tests completed successfully."
                 '''
             }
         }
@@ -92,7 +71,15 @@ pipeline {
         stage('Docker Build') {
             steps {
                 sh '''
-                    docker build -t ${DOCKER_IMAGE}:latest .
+                    set -e
+
+                    echo "=== Building Docker Image ==="
+
+                    docker build \
+                        -t ${DOCKER_IMAGE}:latest \
+                        .
+
+                    echo "Docker image built successfully."
                 '''
             }
         }
@@ -107,11 +94,19 @@ pipeline {
                     )
                 ]) {
                     sh '''
-                        echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+                        set -e
+
+                        echo "=== Logging into Docker Hub ==="
+
+                        echo "$DOCKER_PASSWORD" | docker login \
+                            -u "$DOCKER_USERNAME" \
+                            --password-stdin
 
                         docker push ${DOCKER_IMAGE}:latest
 
                         docker logout
+
+                        echo "Docker image pushed successfully."
                     '''
                 }
             }
@@ -120,6 +115,10 @@ pipeline {
         stage('Deploy') {
             steps {
                 sh '''
+                    set -e
+
+                    echo "=== Deploying Application ==="
+
                     docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
 
                     docker run -d \
@@ -138,15 +137,17 @@ pipeline {
         stage('Health Check') {
             steps {
                 sh '''
-                    echo "Checking application..."
+                    set -e
 
-                    curl -f http://localhost:${HOST_PORT}/ || {
-                        echo "Application health check failed"
+                    echo "=== Health Check ==="
+
+                    if curl -f http://localhost:${HOST_PORT}/; then
+                        echo "Application is UP!"
+                    else
+                        echo "Application health check failed."
                         docker logs ${CONTAINER_NAME}
                         exit 1
-                    }
-
-                    echo "Application is UP!"
+                    fi
                 '''
             }
         }
@@ -162,7 +163,9 @@ pipeline {
         }
 
         always {
-            sh 'docker ps -a --filter "name=rcat-project" || true'
+            sh '''
+                docker ps -a --filter "name=rcat-project" || true
+            '''
         }
     }
 }
