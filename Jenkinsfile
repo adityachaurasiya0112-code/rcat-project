@@ -1,4 +1,3 @@
-```groovy
 pipeline {
     agent any
 
@@ -11,14 +10,12 @@ pipeline {
     environment {
         JAVA17_HOME = '/usr/lib/jvm/java-17-openjdk-amd64'
 
-        // Docker
         DOCKER_IMAGE = 'aditya20266/rcat-project'
         CONTAINER_NAME = 'rcat-project'
 
         APP_PORT = '8081'
         CONTAINER_PORT = '8080'
 
-        // SonarQube
         SONAR_PLUGIN = 'org.sonarsource.scanner.maven:sonar-maven-plugin:5.4.0.6343'
     }
 
@@ -135,4 +132,179 @@ pipeline {
 
         stage('Quality Gate') {
             steps {
-```
+                echo "========================================"
+                echo "       SONARQUBE QUALITY GATE"
+                echo "========================================"
+
+                timeout(time: 10, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+
+                echo "===== Quality Gate Passed ====="
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                sh '''
+                    set -e
+
+                    echo "========================================"
+                    echo "          DOCKER BUILD"
+                    echo "========================================"
+
+                    docker build \
+                        -t ${DOCKER_IMAGE}:${BUILD_NUMBER} \
+                        -t ${DOCKER_IMAGE}:latest \
+                        .
+
+                    echo "===== Docker Image Built Successfully ====="
+
+                    docker images ${DOCKER_IMAGE}
+                '''
+            }
+        }
+
+        stage('Docker Hub Login') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-credentials',
+                        usernameVariable: 'DOCKER_USERNAME',
+                        passwordVariable: 'DOCKER_PASSWORD'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+
+                        echo "===== Logging in to Docker Hub ====="
+
+                        echo "${DOCKER_PASSWORD}" | docker login \
+                            -u "${DOCKER_USERNAME}" \
+                            --password-stdin
+
+                        echo "===== Docker Hub Login Successful ====="
+                    '''
+                }
+            }
+        }
+
+        stage('Docker Push') {
+            steps {
+                sh '''
+                    set -e
+
+                    echo "========================================"
+                    echo "          DOCKER PUSH"
+                    echo "========================================"
+
+                    docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
+                    docker push ${DOCKER_IMAGE}:latest
+
+                    echo "===== Docker Images Pushed Successfully ====="
+                '''
+            }
+        }
+
+        stage('Docker Deploy') {
+            steps {
+                sh '''
+                    set -e
+
+                    echo "========================================"
+                    echo "         DOCKER DEPLOY"
+                    echo "========================================"
+
+                    echo "===== Removing Old Container ====="
+
+                    docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
+
+                    echo "===== Starting New Container ====="
+
+                    docker run -d \
+                        --name ${CONTAINER_NAME} \
+                        --restart unless-stopped \
+                        -p ${APP_PORT}:${CONTAINER_PORT} \
+                        ${DOCKER_IMAGE}:${BUILD_NUMBER}
+
+                    echo "===== Container Started ====="
+
+                    sleep 10
+
+                    echo "===== Container Status ====="
+
+                    docker ps \
+                        --filter "name=${CONTAINER_NAME}"
+
+                    echo "===== Application Health Check ====="
+
+                    if curl -f --max-time 10 http://localhost:${APP_PORT}; then
+                        echo "===== Application is UP ====="
+                    else
+                        echo "===== Application Health Check FAILED ====="
+
+                        echo "===== Docker Logs ====="
+
+                        docker logs ${CONTAINER_NAME} --tail 100
+
+                        exit 1
+                    fi
+
+                    echo "===== Deployment Successful ====="
+                '''
+            }
+        }
+    }
+
+    post {
+
+        success {
+            echo '''
+========================================
+       PIPELINE SUCCESSFUL
+========================================
+
+Application:
+http://65.2.56.162:8081
+
+Jenkins:
+http://13.207.56.243:8080
+
+SonarQube:
+http://13.207.56.243:9000
+
+Docker Image:
+aditya20266/rcat-project:${BUILD_NUMBER}
+
+Docker Container:
+rcat-project
+
+========================================
+'''
+        }
+
+        failure {
+            echo '''
+========================================
+         PIPELINE FAILED
+========================================
+'''
+
+            sh '''
+                echo "===== Docker Containers ====="
+
+                docker ps -a \
+                    --filter "name=${CONTAINER_NAME}" || true
+
+                echo "===== Docker Logs ====="
+
+                docker logs ${CONTAINER_NAME} \
+                    --tail 100 2>/dev/null || true
+            '''
+        }
+
+        always {
+            echo "Pipeline finished: ${currentBuild.currentResult}"
+        }
+    }
+}
