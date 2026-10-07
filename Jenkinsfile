@@ -8,8 +8,6 @@ pipeline {
     }
 
     environment {
-        JAVA17_HOME = '/usr/lib/jvm/java-17-openjdk-amd64'
-
         DOCKER_IMAGE = 'aditya20266/rcat-project'
         CONTAINER_NAME = 'rcat-project'
 
@@ -30,12 +28,16 @@ pipeline {
                     echo "       ENVIRONMENT CHECK"
                     echo "========================================"
 
-                    echo "===== Java 17 ====="
-                    ${JAVA17_HOME}/bin/java -version
+                    echo "===== Java ====="
+                    java -version
+
+                    echo "===== Java Path ====="
+                    which java
+
+                    echo "===== JAVA_HOME ====="
+                    echo "${JAVA_HOME:-JAVA_HOME is not set}"
 
                     echo "===== Maven ====="
-                    export JAVA_HOME=${JAVA17_HOME}
-                    export PATH=${JAVA_HOME}/bin:/usr/bin:/bin
                     mvn -version
 
                     echo "===== Docker ====="
@@ -63,14 +65,9 @@ pipeline {
                 sh '''
                     set -e
 
-                    export JAVA_HOME=${JAVA17_HOME}
-                    export PATH=${JAVA_HOME}/bin:/usr/bin:/bin
-
                     echo "========================================"
                     echo "          MAVEN BUILD"
                     echo "========================================"
-
-                    echo "JAVA_HOME=${JAVA_HOME}"
 
                     java -version
                     mvn -version
@@ -86,9 +83,6 @@ pipeline {
             steps {
                 sh '''
                     set -e
-
-                    export JAVA_HOME=${JAVA17_HOME}
-                    export PATH=${JAVA_HOME}/bin:/usr/bin:/bin
 
                     echo "========================================"
                     echo "             TESTS"
@@ -106,9 +100,6 @@ pipeline {
                 withSonarQubeEnv('sonar-server') {
                     sh '''
                         set -e
-
-                        export JAVA_HOME=${JAVA17_HOME}
-                        export PATH=${JAVA_HOME}/bin:/usr/bin:/bin
 
                         echo "========================================"
                         echo "       SONARQUBE ANALYSIS"
@@ -308,3 +299,4 @@ rcat-project
         }
     }
 }
+
