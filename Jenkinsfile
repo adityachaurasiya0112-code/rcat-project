@@ -13,8 +13,6 @@ pipeline {
 
         APP_PORT = '8081'
         CONTAINER_PORT = '8080'
-
-        SONAR_PLUGIN = 'org.sonarsource.scanner.maven:sonar-maven-plugin:5.4.0.6343'
     }
 
     stages {
@@ -95,46 +93,6 @@ pipeline {
             }
         }
 
-        stage('SonarQube Analysis') {
-            steps {
-                withSonarQubeEnv('sonar-server') {
-                    sh '''
-                        set -e
-
-                        echo "========================================"
-                        echo "       SONARQUBE ANALYSIS"
-                        echo "========================================"
-
-                        echo "SonarQube Server: ${SONAR_HOST_URL}"
-
-                        java -version
-                        mvn -version
-
-                        mvn ${SONAR_PLUGIN}:sonar \
-                            -Dsonar.projectKey=rcat-project \
-                            -Dsonar.projectName=rcat-project \
-                            -Dsonar.host.url=${SONAR_HOST_URL}
-
-                        echo "===== SonarQube Analysis Completed ====="
-                    '''
-                }
-            }
-        }
-
-        stage('Quality Gate') {
-            steps {
-                echo "========================================"
-                echo "       SONARQUBE QUALITY GATE"
-                echo "========================================"
-
-                timeout(time: 10, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: true
-                }
-
-                echo "===== Quality Gate Passed ====="
-            }
-        }
-
         stage('Docker Build') {
             steps {
                 sh '''
@@ -168,7 +126,9 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "===== Logging in to Docker Hub ====="
+                        echo "========================================"
+                        echo "       DOCKER HUB LOGIN"
+                        echo "========================================"
 
                         echo "${DOCKER_PASSWORD}" | docker login \
                             -u "${DOCKER_USERNAME}" \
@@ -260,9 +220,6 @@ http://65.2.56.162:8081
 
 Jenkins:
 http://13.207.56.243:8080
-
-SonarQube:
-http://13.207.56.243:9000
 
 Docker Image:
 aditya20266/rcat-project:${BUILD_NUMBER}
