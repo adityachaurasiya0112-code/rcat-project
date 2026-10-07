@@ -1,55 +1,52 @@
 pipeline {
     agent any
 
-    options {
-        timestamps()
-        timeout(time: 30, unit: 'MINUTES')
-        buildDiscarder(logRotator(numToKeepStr: '10'))
-    }
-
     environment {
+        APP_NAME = 'rcat-project'
         DOCKER_IMAGE = 'aditya20266/rcat-project'
         CONTAINER_NAME = 'rcat-project'
-
-        APP_PORT = '8081'
+        HOST_PORT = '8081'
         CONTAINER_PORT = '8080'
     }
 
     stages {
 
-        stage('Environment Check') {
+        stage('Setup Java 17') {
             steps {
                 sh '''
                     set -e
 
-                    echo "========================================"
-                    echo "       ENVIRONMENT CHECK"
-                    echo "========================================"
+                    echo "=== Setting up Java 17 ==="
 
-                    echo "===== Java ====="
+                    if ! command -v java >/dev/null 2>&1 || \
+                       ! java -version 2>&1 | grep -q '17\\.'; then
+
+                        echo "Java 17 not found. Installing automatically..."
+
+                        sudo apt-get update
+                        sudo apt-get install -y openjdk-17-jdk
+
+                    else
+                        echo "Java 17 already installed."
+                    fi
+
+                    JAVA17_HOME=$(dirname $(dirname $(readlink -f $(which java))))
+
+                    echo "JAVA17_HOME=$JAVA17_HOME"
+
+                    export JAVA_HOME="$JAVA17_HOME"
+                    export PATH="$JAVA_HOME/bin:$PATH"
+
                     java -version
+                    javac -version
 
-                    echo "===== Java Path ====="
-                    which java
-
-                    echo "===== JAVA_HOME ====="
-                    echo "${JAVA_HOME:-JAVA_HOME is not set}"
-
-                    echo "===== Maven ====="
-                    mvn -version
-
-                    echo "===== Docker ====="
-                    docker --version
-
-                    echo "========================================"
+                    echo "Java 17 setup completed."
                 '''
             }
         }
 
         stage('Checkout') {
             steps {
-                echo "===== Checking Out GitHub Repository ====="
-
                 git(
                     url: 'https://github.com/adityachaurasiya0112-code/rcat-project.git',
                     branch: 'main',
@@ -63,16 +60,16 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "========================================"
-                    echo "          MAVEN BUILD"
-                    echo "========================================"
+                    JAVA17_HOME=$(dirname $(dirname $(readlink -f $(which java))))
 
+                    export JAVA_HOME="$JAVA17_HOME"
+                    export PATH="$JAVA_HOME/bin:$PATH"
+
+                    echo "Building with:"
                     java -version
                     mvn -version
 
                     mvn clean package -DskipTests
-
-                    echo "===== Maven Build Successful ====="
                 '''
             }
         }
@@ -82,13 +79,12 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "========================================"
-                    echo "             TESTS"
-                    echo "========================================"
+                    JAVA17_HOME=$(dirname $(dirname $(readlink -f $(which java))))
+
+                    export JAVA_HOME="$JAVA17_HOME"
+                    export PATH="$JAVA_HOME/bin:$PATH"
 
                     mvn test
-
-                    echo "===== Tests Passed ====="
                 '''
             }
         }
@@ -96,25 +92,12 @@ pipeline {
         stage('Docker Build') {
             steps {
                 sh '''
-                    set -e
-
-                    echo "========================================"
-                    echo "          DOCKER BUILD"
-                    echo "========================================"
-
-                    docker build \
-                        -t ${DOCKER_IMAGE}:${BUILD_NUMBER} \
-                        -t ${DOCKER_IMAGE}:latest \
-                        .
-
-                    echo "===== Docker Image Built Successfully ====="
-
-                    docker images ${DOCKER_IMAGE}
+                    docker build -t ${DOCKER_IMAGE}:latest .
                 '''
             }
         }
 
-        stage('Docker Hub Login') {
+        stage('Docker Login & Push') {
             steps {
                 withCredentials([
                     usernamePassword(
@@ -124,136 +107,62 @@ pipeline {
                     )
                 ]) {
                     sh '''
-                        set -e
+                        echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
 
-                        echo "========================================"
-                        echo "       DOCKER HUB LOGIN"
-                        echo "========================================"
+                        docker push ${DOCKER_IMAGE}:latest
 
-                        echo "${DOCKER_PASSWORD}" | docker login \
-                            -u "${DOCKER_USERNAME}" \
-                            --password-stdin
-
-                        echo "===== Docker Hub Login Successful ====="
+                        docker logout
                     '''
                 }
             }
         }
 
-        stage('Docker Push') {
+        stage('Deploy') {
             steps {
                 sh '''
-                    set -e
+                    docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
 
-                    echo "========================================"
-                    echo "          DOCKER PUSH"
-                    echo "========================================"
+                    docker run -d \
+                        --name ${CONTAINER_NAME} \
+                        -p ${HOST_PORT}:${CONTAINER_PORT} \
+                        --restart unless-stopped \
+                        ${DOCKER_IMAGE}:latest
 
-                    docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
-                    docker push ${DOCKER_IMAGE}:latest
+                    sleep 10
 
-                    echo "===== Docker Images Pushed Successfully ====="
+                    docker ps --filter "name=${CONTAINER_NAME}"
                 '''
             }
         }
 
-        stage('Docker Deploy') {
+        stage('Health Check') {
             steps {
                 sh '''
-                    set -e
+                    echo "Checking application..."
 
-                    echo "========================================"
-                    echo "         DOCKER DEPLOY"
-                    echo "========================================"
-
-                    echo "===== Removing Old Container ====="
-
-                    docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
-
-                    echo "===== Starting New Container ====="
-
-                    docker run -d \
-                        --name ${CONTAINER_NAME} \
-                        --restart unless-stopped \
-                        -p ${APP_PORT}:${CONTAINER_PORT} \
-                        ${DOCKER_IMAGE}:${BUILD_NUMBER}
-
-                    echo "===== Container Started ====="
-
-                    sleep 10
-
-                    echo "===== Container Status ====="
-
-                    docker ps \
-                        --filter "name=${CONTAINER_NAME}"
-
-                    echo "===== Application Health Check ====="
-
-                    if curl -f --max-time 10 http://localhost:${APP_PORT}; then
-                        echo "===== Application is UP ====="
-                    else
-                        echo "===== Application Health Check FAILED ====="
-
-                        echo "===== Docker Logs ====="
-
-                        docker logs ${CONTAINER_NAME} --tail 100
-
+                    curl -f http://localhost:${HOST_PORT}/ || {
+                        echo "Application health check failed"
+                        docker logs ${CONTAINER_NAME}
                         exit 1
-                    fi
+                    }
 
-                    echo "===== Deployment Successful ====="
+                    echo "Application is UP!"
                 '''
             }
         }
     }
 
     post {
-
         success {
-            echo '''
-========================================
-       PIPELINE SUCCESSFUL
-========================================
-
-Application:
-http://65.2.56.162:8081
-
-Jenkins:
-http://13.207.56.243:8080
-
-Docker Image:
-aditya20266/rcat-project:${BUILD_NUMBER}
-
-Docker Container:
-rcat-project
-
-========================================
-'''
+            echo 'CI/CD Pipeline completed successfully!'
         }
 
         failure {
-            echo '''
-========================================
-         PIPELINE FAILED
-========================================
-'''
-
-            sh '''
-                echo "===== Docker Containers ====="
-
-                docker ps -a \
-                    --filter "name=${CONTAINER_NAME}" || true
-
-                echo "===== Docker Logs ====="
-
-                docker logs ${CONTAINER_NAME} \
-                    --tail 100 2>/dev/null || true
-            '''
+            echo 'CI/CD Pipeline failed. Check the logs above.'
         }
 
         always {
-            echo "Pipeline finished: ${currentBuild.currentResult}"
+            sh 'docker ps -a --filter "name=rcat-project" || true'
         }
     }
 }
-
